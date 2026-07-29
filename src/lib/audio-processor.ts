@@ -156,9 +156,6 @@ export async function processAudioEdit(
     const performer = session.artist || undefined;
     const title = session.title || undefined;
 
-    // Read files as buffers for sending
-    const audioBuffer = fs.readFileSync(outputFile);
-    
     // Prepare send options
     const sendOptions: Record<string, unknown> = {
       title: title,
@@ -166,15 +163,14 @@ export async function processAudioEdit(
       caption: "✅ فایل ویرایش شده آماده است!",
     };
     
-    // Add thumbnail if cover was set (as buffer)
+    // Add thumbnail if cover was set (as file path)
     if (thumbFile && fs.existsSync(thumbFile)) {
-      const thumbBuffer = fs.readFileSync(thumbFile);
-      sendOptions.thumb = thumbBuffer;
+      sendOptions.thumb = thumbFile;
     }
 
     await bot.sendAudio(
       chatId,
-      audioBuffer,
+      outputFile,
       sendOptions,
       {
         filename: `${outputFileName}.mp3`,
