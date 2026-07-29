@@ -17,7 +17,6 @@ function downloadFileFromUrl(url: string, dest: string): Promise<void> {
     const protocol = url.startsWith("https") ? https : http;
     protocol
       .get(url, (response) => {
-        // Handle redirects
         if (response.statusCode === 301 || response.statusCode === 302) {
           const redirectUrl = response.headers.location;
           if (redirectUrl) {
@@ -58,11 +57,11 @@ export async function processAudioEdit(
   fs.mkdirSync(workDir, { recursive: true });
 
   const inputFile = path.join(workDir, "input.mp3");
-  let outputFile = path.join(workDir, "output.mp3");
+  const outputFile = path.join(workDir, "output.mp3");
   let coverFile: string | undefined;
+  let thumbFile: string | undefined;
 
   try {
-    // Download the audio file
     if (!session.fileId) throw new Error("No file ID");
 
     const fileLink = await bot.getFileLink(session.fileId);
@@ -71,8 +70,14 @@ export async function processAudioEdit(
     // Download cover if set
     if (session.coverFileId) {
       coverFile = path.join(workDir, "cover.jpg");
+      thumbFile = path.join(workDir, "thumb.jpg");
       const coverLink = await bot.getFileLink(session.coverFileId);
       await downloadFileFromUrl(coverLink, coverFile);
+      
+      // Create thumbnail for Telegram (320x320)
+      await execAsync(
+        `ffmpeg -i "${coverFile}" -vf "scale=320:320:force_original_aspect_ratio=decrease,pad=320:320:(ow-iw)/2:(oh-ih)/2" "${thumbFile}" -y`
+      );
     }
 
     let currentInput = inputFile;
@@ -89,7 +94,7 @@ export async function processAudioEdit(
       }
 
       await execAsync(
-        `ffmpeg -i "${currentInput}" -ss ${startSec} -t ${duration} -c copy "${cutOutput}" -y`
+        `ffmpeg -i "${currentInput}" -ss ${startSec} -t ${duration} -c:a libmp3lame -q:a 2 "${cutOutput}" -y`
       );
       currentInput = cutOutput;
     }
@@ -98,7 +103,7 @@ export async function processAudioEdit(
     if (coverFile) {
       const coverOutput = path.join(workDir, "cover_output.mp3");
       await execAsync(
-        `ffmpeg -i "${currentInput}" -i "${coverFile}" -map 0:a -map 1:0 -c copy -id3v2_version 3 -metadata:s:v title="Album cover" -metadata:s:v comment="Cover (front)" "${coverOutput}" -y`
+        `ffmpeg -i "${currentInput}" -i "${coverFile}" -map 0:a -map 1:0 -c:a copy -c:v mjpeg -id3v2_version 3 -metadata:s:v title="Album cover" -metadata:s:v comment="Cover (front)" "${coverOutput}" -y`
       );
       currentInput = coverOutput;
     }
@@ -125,19 +130,16 @@ export async function processAudioEdit(
     }
 
     if (needsTagUpdate) {
-      // Copy to final output if different
       if (currentInput !== outputFile) {
         fs.copyFileSync(currentInput, outputFile);
       }
       const result = NodeID3.update(tags, outputFile);
       if (result !== true) {
-        // If update returns a buffer, write it
         if (Buffer.isBuffer(result)) {
           fs.writeFileSync(outputFile, result);
         }
       }
     } else {
-      // No tag update needed, just copy
       if (currentInput !== outputFile) {
         fs.copyFileSync(currentInput, outputFile);
       }
@@ -150,14 +152,23 @@ export async function processAudioEdit(
     const title = session.title || undefined;
 
     const audioStream = fs.createReadStream(outputFile);
+    
+    // Prepare send options
+    const sendOptions: Record<string, unknown> = {
+      title: title,
+      performer: performer,
+      caption: "✅ فایل ویرایش شده آماده است!",
+    };
+    
+    // Add thumbnail if cover was set
+    if (thumbFile && fs.existsSync(thumbFile)) {
+      sendOptions.thumbnail = fs.createReadStream(thumbFile);
+    }
+
     await bot.sendAudio(
       chatId,
       audioStream as unknown as NodeJS.ReadableStream,
-      {
-        title: title,
-        performer: performer,
-        caption: "✅ فایل ویرایش شده آماده است!",
-      },
+      sendOptions,
       {
         filename: `${outputFileName}.mp3`,
         contentType: "audio/mpeg",
@@ -170,11 +181,10 @@ export async function processAudioEdit(
       { parse_mode: "Markdown" }
     );
   } finally {
-    // Cleanup temp files
     try {
       fs.rmSync(workDir, { recursive: true, force: true });
     } catch {
-      // ignore cleanup errors
+      // ignore
     }
   }
 }
