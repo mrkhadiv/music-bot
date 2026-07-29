@@ -91,7 +91,8 @@ export async function handleAudio(bot: TgBotInstance, msg: TgMessage) {
   });
 }
 
-export async function handlePhoto(bot: TgBotInstance, msg: TgMessage) {chat.id;
+export async function handlePhoto(bot: TgBotInstance, msg: TgMessage) {
+  const chatId = msg.chat.id;
   const userId = msg.from?.id;
   if (!userId) return;
 
