@@ -46,6 +46,21 @@ function parseTimeToSeconds(timeStr: string): number {
   return minutes * 60 + seconds;
 }
 
+async function extractExistingCover(inputFile: string, workDir: string): Promise<string | null> {
+  const existingCover = path.join(workDir, "existing_cover.jpg");
+  try {
+    await execAsync(
+      `ffmpeg -i "${inputFile}" -an -vcodec mjpeg -frames:v 1 "${existingCover}" -y 2>/dev/null`
+    );
+    if (fs.existsSync(existingCover) && fs.statSync(existingCover).size > 0) {
+      return existingCover;
+    }
+  } catch {
+    // No cover art in file
+  }
+  return null;
+}
+
 export async function processAudioEdit(
   bot: TgBotInstance,
   chatId: number,
@@ -59,7 +74,6 @@ export async function processAudioEdit(
   const inputFile = path.join(workDir, "input.mp3");
   const outputFile = path.join(workDir, "output.mp3");
   let coverFile: string | undefined;
-  let coverSquare: string | undefined;
   let thumbFile: string | undefined;
 
   try {
@@ -68,32 +82,40 @@ export async function processAudioEdit(
     const fileLink = await bot.getFileLink(session.fileId);
     await downloadFileFromUrl(fileLink, inputFile);
 
-    // Download and process cover if set
+    // Step 1: Get cover art (new or existing)
     if (session.coverFileId) {
-      coverFile = path.join(workDir, "cover_original.jpg");
-      coverSquare = path.join(workDir, "cover_square.jpg");
-      thumbFile = path.join(workDir, "thumb.jpg");
-      
+      // User sent a new cover
+      const coverOriginal = path.join(workDir, "cover_original.jpg");
       const coverLink = await bot.getFileLink(session.coverFileId);
-      await downloadFileFromUrl(coverLink, coverFile);
+      await downloadFileFromUrl(coverLink, coverOriginal);
       
-      // Make cover 1:1 (square) - crop from center
+      // Make it 1:1 square
+      coverFile = path.join(workDir, "cover_square.jpg");
       await execAsync(
-        `ffmpeg -i "${coverFile}" -vf "crop='min(iw,ih)':'min(iw,ih)',scale=800:800" -q:v 2 "${coverSquare}" -y`
+        `ffmpeg -i "${coverOriginal}" -vf "crop='min(iw,ih)':'min(iw,ih)',scale=800:800" -q:v 2 "${coverFile}" -y`
       );
-      
-      // Create thumbnail for Telegram (320x320)
+    } else {
+      // Try to extract existing cover from the file
+      const existing = await extractExistingCover(inputFile, workDir);
+      if (existing) {
+        coverFile = path.join(workDir, "cover_square.jpg");
+        await execAsync(
+          `ffmpeg -i "${existing}" -vf "crop='min(iw,ih)':'min(iw,ih)',scale=800:800" -q:v 2 "${coverFile}" -y`
+        );
+      }
+    }
+
+    // Create thumbnail from cover
+    if (coverFile && fs.existsSync(coverFile)) {
+      thumbFile = path.join(workDir, "thumb.jpg");
       await execAsync(
-        `ffmpeg -i "${coverSquare}" -vf "scale=320:320" -q:v 2 "${thumbFile}" -y`
+        `ffmpeg -i "${coverFile}" -vf "scale=320:320" -q:v 2 "${thumbFile}" -y`
       );
-      
-      // Use square cover from now on
-      coverFile = coverSquare;
     }
 
     let currentInput = inputFile;
 
-    // Step 1: Cut the audio if requested
+    // Step 2: Cut the audio if requested
     if (session.cutStart && session.cutEnd) {
       const cutOutput = path.join(workDir, "cut_output.mp3");
       const startSec = parseTimeToSeconds(session.cutStart);
@@ -110,8 +132,8 @@ export async function processAudioEdit(
       currentInput = cutOutput;
     }
 
-    // Step 2: Add cover art if provided using ffmpeg
-    if (coverFile) {
+    // Step 3: Add cover art using ffmpeg
+    if (coverFile && fs.existsSync(coverFile)) {
       const coverOutput = path.join(workDir, "cover_output.mp3");
       await execAsync(
         `ffmpeg -i "${currentInput}" -i "${coverFile}" -map 0:a -map 1:0 -c:a copy -c:v mjpeg -id3v2_version 3 -metadata:s:v title="Album cover" -metadata:s:v comment="Cover (front)" "${coverOutput}" -y`
@@ -119,7 +141,7 @@ export async function processAudioEdit(
       currentInput = coverOutput;
     }
 
-    // Step 3: Update ID3 tags
+    // Step 4: Update ID3 tags
     const tags: NodeID3.Tags = {};
     let needsTagUpdate = false;
 
@@ -142,7 +164,7 @@ export async function processAudioEdit(
 
     // Copy to output file
     fs.copyFileSync(currentInput, outputFile);
-    
+
     if (needsTagUpdate) {
       const result = NodeID3.update(tags, outputFile);
       if (result !== true && Buffer.isBuffer(result)) {
@@ -162,8 +184,8 @@ export async function processAudioEdit(
       performer: performer,
       caption: "✅ فایل ویرایش شده آماده است!",
     };
-    
-    // Add thumbnail if cover was set (as file path)
+
+    // Add thumbnail (as file path)
     if (thumbFile && fs.existsSync(thumbFile)) {
       sendOptions.thumb = thumbFile;
     }
@@ -180,7 +202,7 @@ export async function processAudioEdit(
 
     bot.sendMessage(
       chatId,
-      "🎉 *ویرایش با موفقیت انجام شد!*\n\nبرای ویرایش فایل دیگه، یک فایل صوتی جدید ارسال کنید.",
+      "🎉 *ویرایش با موفقیت انجام شد!*\n\nبرای ویرایش فایل دیگه، یک فایل صوتی جدید سال کنید.",
       { parse_mode: "Markdown" }
     );
   } finally {
