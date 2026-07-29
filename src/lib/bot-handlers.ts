@@ -46,6 +46,8 @@ function getSessionSummary(session: UserSession): string {
   if (session.coverFileId) lines.push(`🖼 کاور: ✅ تنظیم شده`);
   if (session.cutStart && session.cutEnd) {
     lines.push(`✂️ برش: از \`${session.cutStart}\` تا \`${session.cutEnd}\``);
+  } else if (session.cutStart) {
+    lines.push(`✂️ برش: شروع از \`${session.cutStart}\` (در انتظار زمان پایان)`);
   }
 
   lines.push("\n*یک گزینه رو انتخاب کنید:*");
@@ -80,6 +82,10 @@ export async function handleAudio(bot: TgBotInstance, msg: TgMessage) {
   session.fileName = fileName;
   session.title = msg.audio?.title || undefined;
   session.artist = msg.audio?.performer || undefined;
+  // Reset cut times for new audio
+  session.cutStart = undefined;
+  session.cutEnd = undefined;
+  session.coverFileId = undefined;
 
   const text = `🎵 *فایل دریافت شد!*\n\n📁 نام فایل: \`${fileName}\`\n${
     session.title ? `🎤 نام آهنگ: \`${session.title}\`\n` : ""
@@ -163,10 +169,17 @@ export async function handleCallbackQuery(
       break;
 
     case "edit_cut":
+      // Check if we have a file first
+      if (!session.fileId) {
+        bot.sendMessage(chatId, "❌ ابتدا یک فایل صوتی ارسال کنید.", {
+          reply_markup: getEditMenuKeyboard(),
+        });
+        return;
+      }
       session.state = "waiting_cut_start";
       bot.sendMessage(
         chatId,
-        "✂️ *زمان شروع برش رو وارد کنید:*\n\nفرمت: `دقیقه:ثانیه` (مثلاً: `0:30` یا `1:45`)",
+        `✂️ *برش آهنگ*\n\n📁 فایل: \`${session.fileName}\`\n\n*زمان شروع برش رو وارد کنید:*\nفرمت: \`دقیقه:ثانیه\`\n\nمثال: \`0:30\` یا \`1:45\``,
         { parse_mode: "Markdown" }
       );
       break;
@@ -311,10 +324,28 @@ export async function handleTextMessage(
       });
       break;
 
+    case "waiting_cut_start": {
+      const startMatch = msg.text.match(/^(\d+):(\d{1,2})$/);
+      if (!startMatch) {
+        bot.sendMessage(chatId, "⚠️ فرمت نادرست! مثال: `0:30` یا `1:45`", {
+          parse_mode: "Markdown",
+        });
+        return;
+      }
+      session.cutStart = msg.text;
+      session.state = "waiting_cut_end";
+      bot.sendMessage(
+        chatId,
+        `✅ شروع برش: \`${msg.text}\`\n\n*حالا زمان پایان برش رو وارد کنید:*\nفرمت: \`دقیقه:ثانیه\`\n\nمثال: \`1:30\` یا \`2:00\``,
+        { parse_mode: "Markdown" }
+      );
+      break;
+    }
+
     case "waiting_cut_end": {
       const endMatch = msg.text.match(/^(\d+):(\d{1,2})$/);
       if (!endMatch) {
-        bot.sendMessage(chatId, "⚠️ فرمت نادرست! مثال: `2:00`", {
+        bot.sendMessage(chatId, "⚠️ فرمت نادرست! مثال: `1:30` یا `2:00`", {
           parse_mode: "Markdown",
         });
         return;
@@ -323,7 +354,7 @@ export async function handleTextMessage(
       session.state = "audio_received";
       bot.sendMessage(
         chatId,
-        `✅ برش تنظیم شد: از \`${session.cutStart}\` تا \`${msg.text}\`\n\n${getSessionSummary(session)}`,
+        `✅ برش تنظیم شد!\n\n📁 فایل: \`${session.fileName}\`\n✂️ از \`${session.cutStart}\` تا \`${msg.text}\`\n\n${getSessionSummary(session)}`,
         {
           parse_mode: "Markdown",
           reply_markup: getEditMenuKeyboard(),
@@ -333,7 +364,15 @@ export async function handleTextMessage(
     }
 
     default:
-      bot.sendMessage(chatId, "📤 یک فایل صوتی (MP3) ارسال کنید تا ویرایش رو شروع کنیم.");
+      // If user has a file, show menu again
+      if (session.fileId) {
+        bot.sendMessage(chatId, `📋 *فایل شما:* \`${session.fileName}\`\n\n*یک گزینه رو انتخاب کنید:*`, {
+          parse_mode: "Markdown",
+          reply_markup: getEditMenuKeyboard(),
+        });
+      } else {
+        bot.sendMessage(chatId, "📤 یک فایل صوتی (MP3) ارسال کنید تا ویرایش رو شروع کنیم.");
+      }
       break;
   }
 }
