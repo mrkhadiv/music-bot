@@ -59,6 +59,7 @@ export async function processAudioEdit(
   const inputFile = path.join(workDir, "input.mp3");
   const outputFile = path.join(workDir, "output.mp3");
   let coverFile: string | undefined;
+  let coverSquare: string | undefined;
   let thumbFile: string | undefined;
 
   try {
@@ -67,17 +68,27 @@ export async function processAudioEdit(
     const fileLink = await bot.getFileLink(session.fileId);
     await downloadFileFromUrl(fileLink, inputFile);
 
-    // Download cover if set
+    // Download and process cover if set
     if (session.coverFileId) {
-      coverFile = path.join(workDir, "cover.jpg");
+      coverFile = path.join(workDir, "cover_original.jpg");
+      coverSquare = path.join(workDir, "cover_square.jpg");
       thumbFile = path.join(workDir, "thumb.jpg");
+      
       const coverLink = await bot.getFileLink(session.coverFileId);
       await downloadFileFromUrl(coverLink, coverFile);
       
+      // Make cover 1:1 (square) - crop from center
+      await execAsync(
+        `ffmpeg -i "${coverFile}" -vf "crop='min(iw,ih)':'min(iw,ih)',scale=800:800" -q:v 2 "${coverSquare}" -y`
+      );
+      
       // Create thumbnail for Telegram (320x320)
       await execAsync(
-        `ffmpeg -i "${coverFile}" -vf "scale=320:320:force_original_aspect_ratio=decrease,pad=320:320:(ow-iw)/2:(oh-ih)/2" "${thumbFile}" -y`
+        `ffmpeg -i "${coverSquare}" -vf "scale=320:320" -q:v 2 "${thumbFile}" -y`
       );
+      
+      // Use square cover from now on
+      coverFile = coverSquare;
     }
 
     let currentInput = inputFile;
@@ -129,19 +140,13 @@ export async function processAudioEdit(
       needsTagUpdate = true;
     }
 
+    // Copy to output file
+    fs.copyFileSync(currentInput, outputFile);
+    
     if (needsTagUpdate) {
-      if (currentInput !== outputFile) {
-        fs.copyFileSync(currentInput, outputFile);
-      }
       const result = NodeID3.update(tags, outputFile);
-      if (result !== true) {
-        if (Buffer.isBuffer(result)) {
-          fs.writeFileSync(outputFile, result);
-        }
-      }
-    } else {
-      if (currentInput !== outputFile) {
-        fs.copyFileSync(currentInput, outputFile);
+      if (result !== true && Buffer.isBuffer(result)) {
+        fs.writeFileSync(outputFile, result);
       }
     }
 
@@ -151,7 +156,8 @@ export async function processAudioEdit(
     const performer = session.artist || undefined;
     const title = session.title || undefined;
 
-    const audioStream = fs.createReadStream(outputFile);
+    // Read files as buffers for sending
+    const audioBuffer = fs.readFileSync(outputFile);
     
     // Prepare send options
     const sendOptions: Record<string, unknown> = {
@@ -160,14 +166,15 @@ export async function processAudioEdit(
       caption: "✅ فایل ویرایش شده آماده است!",
     };
     
-    // Add thumbnail if cover was set
+    // Add thumbnail if cover was set (as buffer)
     if (thumbFile && fs.existsSync(thumbFile)) {
-      sendOptions.thumbnail = fs.createReadStream(thumbFile);
+      const thumbBuffer = fs.readFileSync(thumbFile);
+      sendOptions.thumb = thumbBuffer;
     }
 
     await bot.sendAudio(
       chatId,
-      audioStream as unknown as NodeJS.ReadableStream,
+      audioBuffer,
       sendOptions,
       {
         filename: `${outputFileName}.mp3`,
