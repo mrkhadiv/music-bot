@@ -163,7 +163,7 @@ export async function handleCallbackQuery(
 
     case "edit_cover":
       session.state = "waiting_cover";
-      bot.sendMessage(chatId, "🖼 *عکس کاور جدید رو بفرستید:*\n(یک عکس ارسال کنید)", {
+      bot.sendMessage(chatId, "🖼 *عکس کاور جدید رو بفرستید:*\n\n💡 *نکته:* بهتره عکس مربعی (1:1) بفرستید.\nاگه مربعی نباشه، ربات خودش از وسط برش میزنه و مربعی میکنه.", {
         parse_mode: "Markdown",
       });
       break;
