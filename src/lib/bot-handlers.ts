@@ -310,12 +310,29 @@ export async function handleTextMessage(
       });
       break;
 
-    case "waiting_cut_start": {
-      const startMatch = msg.text.match(/^(\d+):(\d{1,2})$/);
-      if (!startMatch) {
-        bot.sendMessage(chatId, "⚠️ فرمت نادرست! مثال: `1:30`", {
+    case "waiting_cut_end": {
+      const endMatch = msg.text.match(/^(\d+):(\d{1,2})$/);
+      if (!endMatch) {
+        bot.sendMessage(chatId, "⚠️ فرمت نادرست! مثال: `2:00`", {
           parse_mode: "Markdown",
         });
         return;
       }
-      session.cutStart = msg.text;
+      session.cutEnd = msg.text;
+      session.state = "audio_received";
+      bot.sendMessage(
+        chatId,
+        `✅ برش تنظیم شد: از \`${session.cutStart}\` تا \`${msg.text}\`\n\n${getSessionSummary(session)}`,
+        {
+          parse_mode: "Markdown",
+          reply_markup: getEditMenuKeyboard(),
+        }
+      );
+      break;
+    }
+
+    default:
+      bot.sendMessage(chatId, "📤 یک فایل صوتی (MP3) ارسال کنید تا ویرایش رو شروع کنیم.");
+      break;
+  }
+}
